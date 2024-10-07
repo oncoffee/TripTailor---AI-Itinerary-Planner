@@ -1,0 +1,4 @@
+dspy-ai
+openai
+pydantic
+pydantic-settings

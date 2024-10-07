@@ -1,0 +1,5 @@
+.env
+*.env
+local_cache
+__pycache__
+.idea
