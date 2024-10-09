@@ -2,3 +2,5 @@ dspy-ai
 openai
 pydantic
 pydantic-settings
+sentence-transformers
+pymilvus

@@ -1,4 +1,10 @@
+import time
 import dspy
+import requests
+from sentence_transformers import SentenceTransformer
+from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, list_collections
+
+from settings import settings
 
 
 class LMStudioLLM(dspy.LM):
@@ -7,8 +13,6 @@ class LMStudioLLM(dspy.LM):
         self.model_name = model_name
 
     def chat_completion(self, messages):
-        import requests
-
         headers = {
             'Content-Type': 'application/json',
         }
@@ -94,3 +98,137 @@ class GeolocationAgent:
     def get_geolocation(self, itinerary):
         messages = self.create_prompt(itinerary)
         return self.llm.chat_completion(messages)
+
+
+def connect_to_milvus():
+    connections.connect("default", host=settings.milvus_host, port=settings.milvus_port)
+    print("Connected to Milvus")
+
+
+def create_collection():
+    dimension = 384
+
+    if "location_embeddings" in list_collections():
+        print("Collection 'location_embeddings' exists, dropping it...")
+        Collection("location_embeddings").drop()
+
+    fields = [
+        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+        FieldSchema(name="location_name", dtype=DataType.VARCHAR, max_length=255),
+        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dimension),
+        FieldSchema(name="itinerary", dtype=DataType.VARCHAR, max_length=20000),
+        FieldSchema(name="location_suggestions", dtype=DataType.VARCHAR, max_length=20000),
+        FieldSchema(name="geolocation_data", dtype=DataType.VARCHAR, max_length=20000),
+    ]
+
+    schema = CollectionSchema(fields)
+    collection = Collection("location_embeddings", schema)
+    print("Collection created: location_embeddings")
+
+
+def generate_embedding(text):
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+    embedding = model.encode(text)
+    return embedding
+
+
+def retrieve_cached_data(location_name):
+    collection = Collection("location_embeddings")
+
+    query_embedding = generate_embedding(location_name)
+
+    search_result = collection.search(
+        data=[query_embedding],
+        anns_field="embedding",
+        param={"metric_type": "L2", "params": {"nprobe": 10}},
+        limit=1
+    )
+
+    if len(search_result) > 0 and len(search_result[0].ids) > 0:
+        hit = search_result[0]
+        result_id = hit.ids[0]
+
+        result_data = collection.query(expr=f"id == {result_id}",
+                                       output_fields=["location_name", "itinerary", "location_suggestions",
+                                                      "geolocation_data"])
+
+        if result_data:
+            result = result_data[0]
+            location_name = result.get('location_name')
+            itinerary = result.get('itinerary')
+            location_suggestions = result.get('location_suggestions')
+            geolocation_data = result.get('geolocation_data')
+
+            print("\nCached Data Found:")
+            print(f"Location: {location_name}")
+            print("Itinerary:", itinerary)
+            print("Location Suggestions:", location_suggestions)
+            print("Geolocation Data:", geolocation_data)
+        else:
+            print(f"No cached data found for location: {location_name}")
+    else:
+        print(f"No cached data found for location: {location_name}")
+
+
+def store_embedding_in_milvus(embedding, location_name, itinerary, location_suggestions, geolocation_data):
+    collection = Collection("location_embeddings")
+
+    collection.load()
+
+    collection.insert([
+        [location_name],
+        [embedding],
+        [itinerary],
+        [location_suggestions],
+        [geolocation_data]
+    ])
+
+    collection.flush()
+
+    print(f"Stored embedding and metadata in Milvus for '{location_name}'")
+
+
+def check_existing_embedding(location_name):
+    collection = Collection("location_embeddings")
+
+    collection.load()
+
+    num_entities = collection.num_entities
+    if num_entities == 0:
+        print(f"No data exists in the collection.")
+        return False
+
+    query_embedding = generate_embedding(location_name)
+
+    search_result = collection.search(
+        data=[query_embedding],
+        anns_field="embedding",
+        param={"metric_type": "L2", "params": {"nprobe": 20}},
+        limit=1
+    )
+
+    if len(search_result) > 0 and len(search_result[0].ids) > 0:
+        print(f"Location '{location_name}' found in Milvus.")
+        return True
+    else:
+        print(f"Location '{location_name}' not found in Milvus.")
+        return False
+
+
+def create_index():
+    collection = Collection("location_embeddings")
+
+    index_params = {
+        "index_type": "IVF_FLAT",
+        "metric_type": "L2",
+        "params": {"nlist": 128}
+    }
+
+    collection.create_index(field_name="embedding", index_params=index_params)
+    print("Index creation initiated on the 'embedding' field.")
+
+    while not collection.has_index():
+        print("Waiting for index to be ready...")
+        time.sleep(1)
+
+    print("Index created successfully.")
