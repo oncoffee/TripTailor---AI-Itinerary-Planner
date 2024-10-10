@@ -1,10 +1,9 @@
 import threading
 import time
-from settings import settings
-from agents import LMStudioLLM, LocationAgent, ItineraryAgent, GeolocationAgent, \
-    check_existing_embedding, connect_to_milvus, create_collection, retrieve_cached_data, create_index, \
-    generate_embedding, store_embedding_in_milvus
 
+from milvus_manager import MilvusManager
+from settings import settings
+from agents import LMStudioLLM, LocationAgent, ItineraryAgent, GeolocationAgent
 
 def loader():
     """Displays a simple loading animation in a separate thread."""
@@ -24,9 +23,10 @@ if __name__ == "__main__":
     itinerary_agent = ItineraryAgent(llm=local_llm)
     geolocation_agent = GeolocationAgent(llm=local_llm)
 
-    connect_to_milvus()
-    create_collection()
-    create_index()
+    milvus_manager = MilvusManager()
+    milvus_manager.connect()
+    milvus_manager.create_collection()
+    milvus_manager.create_index()
 
     while True:
         print("Enter your travel details (e.g., '5 days in Paris') or type 'exit' to quit.")
@@ -39,9 +39,9 @@ if __name__ == "__main__":
             days = days.strip()
             location = location.strip()
 
-            if check_existing_embedding(location):
+            if milvus_manager.check_existing_embedding(location):
                 print(f"\nLocation '{location}' found in Milvus. Retrieving data...")
-                retrieve_cached_data(location)
+                milvus_manager.retrieve_cached_data(location)
             else:
                 print(f"\nLocation '{location}' not found in Milvus. Querying LLM for new data...")
 
@@ -79,8 +79,8 @@ if __name__ == "__main__":
                 print("\nGeolocation Data:\n", geolocation_data)
 
                 print("\nStoring data in Milvus for future use...")
-                embedding = generate_embedding(location)  # Create embedding for location
-                store_embedding_in_milvus(embedding, location, itinerary, location_suggestions, geolocation_data)
+                embedding = milvus_manager.generate_embedding(location)
+                milvus_manager.store_embedding(location, embedding, itinerary, location_suggestions, geolocation_data)
                 print(f"Data for '{location}' stored successfully in Milvus!")
 
         except ValueError:
